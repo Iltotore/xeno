@@ -3,4 +3,6 @@
 _pier
 *.hi
 *.o
+*.lock
 data/ex
+dist-newstyle
