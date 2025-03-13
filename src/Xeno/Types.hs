@@ -34,7 +34,7 @@ instance Exception XenoException where displayException = show
 -- | ByteString wich guaranted have '\NUL' at the end
 newtype ByteStringZeroTerminated = BSZT ByteString deriving (Generic, NFData)
 
--- |Emulation of Scala's (*:).
--- See https://www.scala-lang.org/api/3.6.4/scala/$times$colon$.html
+-- |HList/"Flat tuple" used to easily manipulate products, defined as a head with a tail.
+-- See https://www.scala-lang.org/api/3.6.4/scala/$times$colon$.html.
 data h :*: t = h :*: t
 infixr :*:

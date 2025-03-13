@@ -31,7 +31,7 @@ flag whitespace-around-equals
 library
   hs-source-dirs: src
   ghc-options: -Wall -O2
-  exposed-modules: Xeno.SAX, Xeno.DOM, Xeno.DOM.Internal, Xeno.DOM.Robust, Xeno.Types, Xeno.Errors
+  exposed-modules: Xeno.SAX, Xeno.DOM, Xeno.DOM.Decoding, Xeno.DOM.Internal, Xeno.DOM.Internal.Typelevel, Xeno.DOM.Robust, Xeno.Types, Xeno.Errors
                    
   other-modules: Control.Spork
   build-depends: base >= 4.7 && < 5
