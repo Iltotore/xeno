@@ -13,7 +13,7 @@ where
 import Xeno.DOM
 import Data.ByteString ( ByteString )
 import Data.ByteString.Char8 ( unpack, pack )
-import Control.Monad ((>=>))
+import Control.Monad ((>=>), ap)
 import Data.List (find)
 import Xeno.DOM.Internal.Typelevel
 import Text.Read (readEither)
@@ -89,5 +89,43 @@ instance ToFieldDecoders '[] where
 instance (AttrDecoder a, ToFieldDecoders as) => ToFieldDecoders (a ': as) where
   fieldDecoders (x `HCons` xs) = decodeField x `zipProduct` fieldDecoders @as xs
 
-decodeAllFields :: forall as b. (Currying as b, ToFieldDecoders as) => Arrows as b -> Fields as -> NodeDecoder b
-decodeAllFields f fields = mapAll @as f (fieldDecoders @as fields)
+instance Applicative NodeDecoder where
+  pure x = NodeDecoder (\_ -> Right x)
+
+  (<*>) = ap
+
+instance Monad NodeDecoder where
+  return = pure
+
+  a >>= f = NodeDecoder
+    (\node -> case decodeXML a node of
+      Right x -> decodeXML (f x) node
+      Left err -> Left err
+    )
+
+decodeAssert :: (Node -> Bool) -> (Node -> String) -> NodeDecoder ()
+decodeAssert fcheck fmsg = NodeDecoder
+  (\node ->
+    if fcheck node then Right ()
+    else Left (fmsg node)
+  )
+
+decodeProduct :: forall as b. (Currying as b, ToFieldDecoders as) => String -> Arrows as b -> Fields as -> NodeDecoder b
+decodeProduct n f fields =
+  decodeAssert (\nd -> name nd == pack n) (\nd -> "Invalid product name: " ++ unpack (name nd))
+  >> mapAll @as f (fieldDecoders @as fields)
+
+-- TODO Remove example
+
+newtype Username = Username String
+  deriving (Show, AttrDecoder)
+
+data User = User Username Int
+  deriving Show
+
+decodeUser :: NodeDecoder User
+decodeUser = decodeProduct
+  @[Username, Int]
+  "user"
+  User
+  ("name" `HCons` "age" `HCons` ())
