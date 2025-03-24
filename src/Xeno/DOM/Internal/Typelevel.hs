@@ -19,13 +19,13 @@ module Xeno.DOM.Internal.Typelevel
 where
 import GHC.Exts (Constraint)
 import Data.Kind (Type)
-import Xeno.Types ((:*:) ((:*:)))
+import Xeno.Types (HCons (HCons))
 
-uncurryProduct :: (a -> b -> c) -> (a :*: b) -> c
-uncurryProduct f (a :*: b) = f a b
+uncurryProduct :: (a -> b -> c) -> (a `HCons` b) -> c
+uncurryProduct f (a `HCons` b) = f a b
 
-curryProduct :: ((a :*: b) -> c) -> a -> b -> c
-curryProduct f a b = f (a :*: b)
+curryProduct :: ((a `HCons` b) -> c) -> a -> b -> c
+curryProduct f a b = f (a `HCons` b)
 
 type family All (p :: k -> Constraint) (as :: [k]) :: Constraint where
   All p '[]       = ()
@@ -36,11 +36,11 @@ type family Foldr (c :: k -> l -> l) (n :: l) (as :: [k]) :: l where
   Foldr c n (a ': as) = c a (Foldr c n as)
 
 type Arrows   (as :: [Type]) (r :: Type) = Foldr (->) r as
-type Products (as :: [Type])             = Foldr (:*:) () as
+type Products (as :: [Type])             = Foldr HCons () as
 
 type family Fields (as :: [k]) :: l where
   Fields '[] = ()
-  Fields (x ': xs) = String :*: Fields xs
+  Fields (x ': xs) = String `HCons` Fields xs
 
 class Currying as b where
   uncurrys :: Arrows as b -> Products as -> b

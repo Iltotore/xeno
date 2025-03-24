@@ -5,6 +5,7 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 {-# OPTIONS_GHC -Wno-unused-top-binds #-} -- Public API
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module Xeno.DOM.Decoding
 where
@@ -16,7 +17,7 @@ import Control.Monad ((>=>))
 import Data.List (find)
 import Xeno.DOM.Internal.Typelevel
 import Text.Read (readEither)
-import Xeno.Types (type (:*:)((:*:)))
+import Xeno.Types (HCons (HCons))
 
 --- AttrDecoder ---
 
@@ -56,12 +57,8 @@ newtype NodeDecoder a = NodeDecoder { decodeXML :: Node -> Either String a }
 instance Functor NodeDecoder where
   fmap f da = NodeDecoder (fmap f . decodeXML da)
 
-zipProduct :: NodeDecoder a -> NodeDecoder b -> NodeDecoder (a :*: b)
-zipProduct da db = NodeDecoder (\n -> decodeXML da n >>= (\x -> fmap (x :*:) (decodeXML db n)))
-
-(***) :: NodeDecoder a -> NodeDecoder b -> NodeDecoder (a :*: b)
-(***) = zipProduct
-infixr ***
+zipProduct :: NodeDecoder a -> NodeDecoder b -> NodeDecoder (a `HCons` b)
+zipProduct da db = NodeDecoder (\n -> decodeXML da n >>= (\x -> fmap (x `HCons`) (decodeXML db n)))
 
 findAttribute :: String -> Node -> Maybe ByteString
 findAttribute fname node = fmap snd (find (\(n, _) -> n == pack fname) (attributes node))
@@ -90,7 +87,7 @@ instance ToFieldDecoders '[] where
   fieldDecoders () = decodeUnit
 
 instance (AttrDecoder a, ToFieldDecoders as) => ToFieldDecoders (a ': as) where
-  fieldDecoders (x :*: xs) = decodeField x *** fieldDecoders @as xs
+  fieldDecoders (x `HCons` xs) = decodeField x `zipProduct` fieldDecoders @as xs
 
 decodeAllFields :: forall as b. (Currying as b, ToFieldDecoders as) => Arrows as b -> Fields as -> NodeDecoder b
 decodeAllFields f fields = mapAll @as f (fieldDecoders @as fields)
