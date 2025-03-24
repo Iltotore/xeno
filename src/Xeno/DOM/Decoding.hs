@@ -6,6 +6,7 @@
 {-# LANGUAGE TypeOperators #-}
 {-# OPTIONS_GHC -Wno-unused-top-binds #-} -- Public API
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE InstanceSigs #-}
 
 module Xeno.DOM.Decoding
 where
@@ -13,7 +14,7 @@ where
 import Xeno.DOM
 import Data.ByteString ( ByteString )
 import Data.ByteString.Char8 ( unpack, pack )
-import Control.Monad ((>=>), ap)
+import Control.Monad (ap)
 import Data.List (find)
 import Xeno.DOM.Internal.Typelevel
 import Text.Read (readEither)
@@ -52,68 +53,106 @@ decodeFromRead err str = case readEither $ unpack str of
 
 --- NodeDecoder ---
 
-newtype NodeDecoder a = NodeDecoder { decodeXML :: Node -> Either String a }
+data DecodingCursor =
+  RootCursor
+  | FieldCursor String DecodingCursor
+  | NodeCursor String DecodingCursor
+  deriving Show
+
+cursorParent :: DecodingCursor -> Maybe DecodingCursor
+cursorParent RootCursor = Nothing
+cursorParent (FieldCursor _ parent) = Just parent
+cursorParent (NodeCursor _ parent)  = Just parent
+
+data DecodingFailure = DecodingFailure DecodingCursor String
+  deriving Show
+
+newtype NodeDecoder a = NodeDecoder { applyDecoder :: DecodingCursor -> Node -> Either [DecodingFailure] a }
+
+decodeXML :: NodeDecoder a -> Node -> Either [DecodingFailure] a
+decodeXML decoder = applyDecoder decoder RootCursor
 
 instance Functor NodeDecoder where
-  fmap f da = NodeDecoder (fmap f . decodeXML da)
-
-zipProduct :: NodeDecoder a -> NodeDecoder b -> NodeDecoder (a `HCons` b)
-zipProduct da db = NodeDecoder (\n -> decodeXML da n >>= (\x -> fmap (x `HCons`) (decodeXML db n)))
-
-findAttribute :: String -> Node -> Maybe ByteString
-findAttribute fname node = fmap snd (find (\(n, _) -> n == pack fname) (attributes node))
-
-findAttributeOrFail :: String -> Node -> Either String ByteString
-findAttributeOrFail fname node = case findAttribute fname node of
-  Just result -> Right result
-  Nothing -> Left ("Field not found: " ++ fname)
-
-mapOrFail :: (a -> Either String b) -> NodeDecoder a -> NodeDecoder b
-mapOrFail f da = NodeDecoder (decodeXML da >=> f)
-
-decodeField :: AttrDecoder a => String -> NodeDecoder a
-decodeField attr1 = NodeDecoder (findAttributeOrFail attr1 >=> decodeAttr)
-
-mapAll :: forall as b. Currying as b => Arrows as b -> NodeDecoder (Products as) -> NodeDecoder b
-mapAll f = fmap (uncurrys @as f)
-
-decodeUnit :: NodeDecoder ()
-decodeUnit = NodeDecoder (\_ -> Right ())
-
-class ToFieldDecoders as where
-  fieldDecoders :: Fields as -> NodeDecoder (Products as)
-
-instance ToFieldDecoders '[] where
-  fieldDecoders () = decodeUnit
-
-instance (AttrDecoder a, ToFieldDecoders as) => ToFieldDecoders (a ': as) where
-  fieldDecoders (x `HCons` xs) = decodeField x `zipProduct` fieldDecoders @as xs
+  fmap f da = NodeDecoder (\cursor node -> fmap f (applyDecoder da cursor node))
 
 instance Applicative NodeDecoder where
-  pure x = NodeDecoder (\_ -> Right x)
+  pure x = NodeDecoder (\_ _ -> Right x)
 
   (<*>) = ap
 
 instance Monad NodeDecoder where
   return = pure
 
-  a >>= f = NodeDecoder
-    (\node -> case decodeXML a node of
-      Right x -> decodeXML (f x) node
+  da >>= f = NodeDecoder
+    (\cursor node -> case applyDecoder da cursor node of
+      Right x -> applyDecoder (f x) cursor node
       Left err -> Left err
     )
 
-decodeAssert :: (Node -> Bool) -> (Node -> String) -> NodeDecoder ()
-decodeAssert fcheck fmsg = NodeDecoder
-  (\node ->
-    if fcheck node then Right ()
-    else Left (fmsg node)
+contramapCursor :: (DecodingCursor -> DecodingCursor) -> NodeDecoder a -> NodeDecoder a
+contramapCursor f decoder = NodeDecoder (applyDecoder decoder . f)
+
+zipProduct :: NodeDecoder a -> NodeDecoder b -> NodeDecoder (a `HCons` b)
+zipProduct da db = NodeDecoder
+  (\c n -> case (applyDecoder da c n, applyDecoder db c n) of
+    (Right x, Right y) -> Right (x `HCons` y)
+    (Right _, Left yErr) -> Left yErr
+    (Left xErr, Right _) -> Left xErr
+    (Left xErr, Left yErr) -> Left (xErr ++ yErr)
   )
 
-decodeProduct :: forall as b. (Currying as b, ToFieldDecoders as) => String -> Arrows as b -> Fields as -> NodeDecoder b
-decodeProduct n f fields =
-  decodeAssert (\nd -> name nd == pack n) (\nd -> "Invalid product name: " ++ unpack (name nd))
-  >> mapAll @as f (fieldDecoders @as fields)
+findAttribute :: String -> Node -> Maybe ByteString
+findAttribute fname node = fmap snd (find (\(n, _) -> n == pack fname) (attributes node))
+
+findAttributeOrFail :: String -> DecodingCursor -> Node -> Either [DecodingFailure] ByteString
+findAttributeOrFail fname cursor node = case findAttribute fname node of
+  Just result -> Right result
+  Nothing -> Left [DecodingFailure (FieldCursor fname cursor) ("Field not found: " ++ fname)]
+
+mapOrFail :: (a -> Either String b) -> NodeDecoder a -> NodeDecoder b
+mapOrFail f da = NodeDecoder
+  (\c n -> case applyDecoder da c n of
+    Left err -> Left err
+    Right x  -> case f x of
+      Left msg -> Left [DecodingFailure c msg]
+      Right y  -> Right y
+  )
+
+decodeField :: AttrDecoder a => String -> NodeDecoder a
+decodeField attrName = NodeDecoder
+  (\c n -> case findAttributeOrFail attrName c n of
+    Left err   -> Left err
+    Right attr -> case decodeAttr attr of
+      Left msg -> Left [DecodingFailure (FieldCursor attrName c) msg]
+      Right x  -> Right x
+  )
+
+mapAll :: forall as b. Currying as b => Arrows as b -> NodeDecoder (Products as) -> NodeDecoder b
+mapAll f = fmap (uncurrys @as f)
+
+class ToFieldDecoders as where
+  fieldDecoders :: Fields as -> NodeDecoder (Products as)
+
+instance ToFieldDecoders '[] where
+  fieldDecoders () = return ()
+
+instance (AttrDecoder a, ToFieldDecoders as) => ToFieldDecoders (a ': as) where
+  fieldDecoders (x `HCons` xs) = decodeField x `zipProduct` fieldDecoders @as xs
+
+decodeAssert :: (Node -> Bool) -> (Node -> String) -> NodeDecoder ()
+decodeAssert fcheck fmsg = NodeDecoder
+  (\cursor node ->
+    if fcheck node then Right ()
+    else Left [DecodingFailure cursor (fmsg node)]
+  )
+
+decodeProductAttributes :: forall as b. (Currying as b, ToFieldDecoders as) => String -> Arrows as b -> Fields as -> NodeDecoder b
+decodeProductAttributes n f fields = contramapCursor
+  (NodeCursor n)
+  (
+    decodeAssert (\nd -> name nd == pack n) (\nd -> "Invalid product name: " ++ unpack (name nd))
+    >> mapAll @as f (fieldDecoders @as fields)
+  )
 
 -- TODO Remove example
 
@@ -124,7 +163,7 @@ data User = User Username Int
   deriving Show
 
 decodeUser :: NodeDecoder User
-decodeUser = decodeProduct
+decodeUser = decodeProductAttributes
   @[Username, Int]
   "user"
   User
