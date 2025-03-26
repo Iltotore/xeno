@@ -7,10 +7,9 @@
 {-# OPTIONS_GHC -Wno-unused-top-binds #-} -- Public API
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
-
+--- |Higher level DOM decoding utils.
 module Xeno.DOM.Decoding
 where
-
 import Xeno.DOM
 import Data.ByteString ( ByteString )
 import Data.ByteString.Char8 ( unpack, pack )
@@ -22,30 +21,39 @@ import Xeno.Types (HCons (HCons))
 
 --- AttrDecoder ---
 
+-- |Decoder for a single node attribute.
 class AttrDecoder a where
   decodeAttr :: ByteString -> Either String a
 
+-- |AttrDecoder for ByteString.
 instance AttrDecoder ByteString where
   decodeAttr = Right
 
+-- |AttrDecoder for String.
 instance AttrDecoder String where
   decodeAttr = Right . unpack
 
+-- |AttrDecoder for Bool.
 instance AttrDecoder Bool where
   decodeAttr = decodeFromRead "Invalid bool"
 
+-- |AttrDecoder for Int.
 instance AttrDecoder Int where
   decodeAttr = decodeFromRead "Invalid int"
 
+-- |AttrDecoder for Integer.
 instance AttrDecoder Integer where
   decodeAttr = decodeFromRead "Invalid integer"
 
+-- |AttrDecoder for Float.
 instance AttrDecoder Float where
   decodeAttr = decodeFromRead "Invalid float"
 
+-- |AttrDecoder for Double.
 instance AttrDecoder Double where
   decodeAttr = decodeFromRead "Invalid double"
 
+-- |Decode an attribute using an instance of `Read`.
 decodeFromRead :: Read a => String -> ByteString -> Either String a
 decodeFromRead err str = case readEither $ unpack str of
   Right value -> Right value
@@ -53,24 +61,26 @@ decodeFromRead err str = case readEither $ unpack str of
 
 --- NodeDecoder ---
 
+-- |The cursor pointing to a part of the DOM being decoded.
 data DecodingCursor =
-  RootCursor
-  | FieldCursor String DecodingCursor
-  | NodeCursor String DecodingCursor
+  RootCursor -- ^The root of the XML arborescence.
+  | FieldCursor String DecodingCursor -- ^A field in a node.
+  | NodeCursor String DecodingCursor -- ^A node.
   deriving Show
 
+-- |Get the parent of a given cursor.
 cursorParent :: DecodingCursor -> Maybe DecodingCursor
 cursorParent RootCursor = Nothing
 cursorParent (FieldCursor _ parent) = Just parent
 cursorParent (NodeCursor _ parent)  = Just parent
 
+-- |A decoding failure represented by a cursor where the failure occurred and an error message.
 data DecodingFailure = DecodingFailure DecodingCursor String
   deriving Show
 
+-- |An XML node decoder. Since a node can be decoded in several "natural" ways, this is not a typeclass.
+-- Instead, the goal is to provide some sort of DSL to easily describe the decoding logic.
 newtype NodeDecoder a = NodeDecoder { applyDecoder :: DecodingCursor -> Node -> Either [DecodingFailure] a }
-
-decodeXML :: NodeDecoder a -> Node -> Either [DecodingFailure] a
-decodeXML decoder = applyDecoder decoder RootCursor
 
 instance Functor NodeDecoder where
   fmap f da = NodeDecoder (\cursor node -> fmap f (applyDecoder da cursor node))
@@ -89,11 +99,17 @@ instance Monad NodeDecoder where
       Left err -> Left err
     )
 
+-- |Decode a XML node. Same as using `applyDecoder` with `RootCursor`.
+decodeXML :: NodeDecoder a -> Node -> Either [DecodingFailure] a
+decodeXML decoder = applyDecoder decoder RootCursor
+
+-- |Map the cursor passed as input of the given decoder.
 contramapCursor :: (DecodingCursor -> DecodingCursor) -> NodeDecoder a -> NodeDecoder a
 contramapCursor f decoder = NodeDecoder (applyDecoder decoder . f)
 
-zipProduct :: NodeDecoder a -> NodeDecoder b -> NodeDecoder (a `HCons` b)
-zipProduct da db = NodeDecoder
+-- |Zip the result of two decoders into a HCons.
+zipHCons :: NodeDecoder a -> NodeDecoder b -> NodeDecoder (a `HCons` b)
+zipHCons da db = NodeDecoder
   (\c n -> case (applyDecoder da c n, applyDecoder db c n) of
     (Right x, Right y) -> Right (x `HCons` y)
     (Right _, Left yErr) -> Left yErr
@@ -101,14 +117,17 @@ zipProduct da db = NodeDecoder
     (Left xErr, Left yErr) -> Left (xErr ++ yErr)
   )
 
+-- |Find the value of an attribute.
 findAttribute :: String -> Node -> Maybe ByteString
 findAttribute fname node = fmap snd (find (\(n, _) -> n == pack fname) (attributes node))
 
+-- |Find the value of an attribute, converting Nothing into a failing either.
 findAttributeOrFail :: String -> DecodingCursor -> Node -> Either [DecodingFailure] ByteString
 findAttributeOrFail fname cursor node = case findAttribute fname node of
   Just result -> Right result
   Nothing -> Left [DecodingFailure (FieldCursor fname cursor) ("Field not found: " ++ fname)]
 
+-- |Map the given value or fail.
 mapOrFail :: (a -> Either String b) -> NodeDecoder a -> NodeDecoder b
 mapOrFail f da = NodeDecoder
   (\c n -> case applyDecoder da c n of
@@ -118,6 +137,7 @@ mapOrFail f da = NodeDecoder
       Right y  -> Right y
   )
 
+-- |Decode a field in the current node using the associated `AttrDecoder`.
 decodeField :: AttrDecoder a => String -> NodeDecoder a
 decodeField attrName = NodeDecoder
   (\c n -> case findAttributeOrFail attrName c n of
@@ -127,9 +147,11 @@ decodeField attrName = NodeDecoder
       Right x  -> Right x
   )
 
+-- |Map the values of the HList produced by the given `NodeDecoder`
 mapAll :: forall as b. Currying as b => Arrows as b -> NodeDecoder (Products as) -> NodeDecoder b
 mapAll f = fmap (uncurrys @as f)
 
+-- |Typeclass for producing a HList of String the same size than the given one.
 class ToFieldDecoders as where
   fieldDecoders :: Fields as -> NodeDecoder (Products as)
 
@@ -137,8 +159,9 @@ instance ToFieldDecoders '[] where
   fieldDecoders () = return ()
 
 instance (AttrDecoder a, ToFieldDecoders as) => ToFieldDecoders (a ': as) where
-  fieldDecoders (x `HCons` xs) = decodeField x `zipProduct` fieldDecoders @as xs
+  fieldDecoders (x `HCons` xs) = decodeField x `zipHCons` fieldDecoders @as xs
 
+-- |Assert a condition on the decoded node or fail with the given error message.
 decodeAssert :: (Node -> Bool) -> (Node -> String) -> NodeDecoder ()
 decodeAssert fcheck fmsg = NodeDecoder
   (\cursor node ->
@@ -146,6 +169,7 @@ decodeAssert fcheck fmsg = NodeDecoder
     else Left [DecodingFailure cursor (fmsg node)]
   )
 
+-- |Use the given decoder inside the current node if the name checks out.
 inNode :: String -> NodeDecoder a -> NodeDecoder a
 inNode n decoder = contramapCursor
   (NodeCursor n)
@@ -154,9 +178,11 @@ inNode n decoder = contramapCursor
     >> decoder
   )
 
+-- |Decode node multiple attributes and map them using the given function, usually to a product.
 decodeProductAttributes :: forall as b. (Currying as b, ToFieldDecoders as) => Arrows as b -> Fields as -> NodeDecoder b
 decodeProductAttributes f fields = mapAll @as f (fieldDecoders @as fields)
 
+-- |Use the given decoder to decode children inside the current node.
 decodeChildren :: NodeDecoder a -> NodeDecoder [a]
 decodeChildren childDecoder = NodeDecoder
   (\cursor node ->
