@@ -148,12 +148,12 @@ decodeField attrName = NodeDecoder
   )
 
 -- |Map the values of the HList produced by the given `NodeDecoder`
-mapAll :: forall as b. Currying as b => Arrows as b -> NodeDecoder (Products as) -> NodeDecoder b
+mapAll :: forall as b. Currying as b => Arrows as b -> NodeDecoder (HList as) -> NodeDecoder b
 mapAll f = fmap (uncurrys @as f)
 
 -- |Typeclass for producing a HList of String the same size than the given one.
 class ToFieldDecoders as where
-  fieldDecoders :: Fields as -> NodeDecoder (Products as)
+  fieldDecoders :: Fields as -> NodeDecoder (HList as)
 
 instance ToFieldDecoders '[] where
   fieldDecoders () = return ()
@@ -179,8 +179,8 @@ inNode n decoder = contramapCursor
   )
 
 -- |Decode node multiple attributes and map them using the given function, usually to a product.
-decodeProductAttributes :: forall as b. (Currying as b, ToFieldDecoders as) => Arrows as b -> Fields as -> NodeDecoder b
-decodeProductAttributes f fields = mapAll @as f (fieldDecoders @as fields)
+decodeAllAttributes :: forall as b. (Currying as b, ToFieldDecoders as) => Arrows as b -> Fields as -> NodeDecoder b
+decodeAllAttributes f fields = mapAll @as f (fieldDecoders @as fields)
 
 -- |Use the given decoder to decode children inside the current node.
 decodeChildren :: NodeDecoder a -> NodeDecoder [a]
@@ -214,7 +214,7 @@ data User = User UserInfo [Friend]
 decodeFriend :: NodeDecoder Friend
 decodeFriend = inNode
     "friend"
-    (decodeProductAttributes
+    (decodeAllAttributes
       @[Username, Username]
       Friend
       ("name" `HCons` "nickname" `HCons` ())
@@ -224,7 +224,7 @@ decodeUser :: NodeDecoder User
 decodeUser = inNode
   "user"
   (do
-    info <- decodeProductAttributes
+    info <- decodeAllAttributes
       @[Username, Int]
       UserInfo
       ("name" `HCons` "age" `HCons` ())

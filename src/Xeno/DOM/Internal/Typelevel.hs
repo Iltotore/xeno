@@ -13,9 +13,9 @@ module Xeno.DOM.Internal.Typelevel
   ( All
   , Arrows
   , Currying (currys, uncurrys)
+  , HList
   , Fields
   , Foldr
-  , Products
   )
 where
 import GHC.Exts (Constraint)
@@ -43,9 +43,9 @@ type family Foldr (c :: k -> l -> l) (n :: l) (as :: [k]) :: l where
 -- |Type of a function taking each element of `as` as argument and returning `r`.
 type Arrows   (as :: [Type]) (r :: Type) = Foldr (->) r as
 
--- |Type of a HCons containing each element of `as`.
+-- |Type of a HList containing each element of `as`.
 -- Often used as extractor.
-type Products (as :: [Type])             = Foldr HCons () as
+type HList (as :: [Type])             = Foldr HCons () as
 
 -- |Type of a HList of the same size as the `as`, containing only Strings.
 type family Fields (as :: [k]) :: l where
@@ -55,10 +55,10 @@ type family Fields (as :: [k]) :: l where
 -- |Typeclass for uncurrying n-ary functions to n-size HList and vice-versa.
 class Currying as b where
   -- |Uncurry a n-ary function to a function taking a n-size HList.
-  uncurrys :: Arrows as b -> Products as -> b
+  uncurrys :: Arrows as b -> HList as -> b
 
   -- |Curry a function taking a n-size HList to a n-ary function
-  currys   :: (Products as -> b) -> Arrows as b
+  currys   :: (HList as -> b) -> Arrows as b
 
 instance Currying '[] b where
   currys   f = f ()
