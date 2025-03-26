@@ -146,9 +146,13 @@ decodeAssert fcheck fmsg = NodeDecoder
     else Left [DecodingFailure cursor (fmsg node)]
   )
 
-decodeAssertName :: String -> NodeDecoder ()
-decodeAssertName n =
-  decodeAssert (\nd -> name nd == pack n) (\nd -> "Invalid product name: " ++ unpack (name nd))
+inNode :: String -> NodeDecoder a -> NodeDecoder a
+inNode n decoder = contramapCursor
+  (NodeCursor n)
+  (
+    decodeAssert (\nd -> name nd == pack n) (\nd -> "Invalid product name: " ++ unpack (name nd))
+    >> decoder
+  )
 
 decodeProductAttributes :: forall as b. (Currying as b, ToFieldDecoders as) => Arrows as b -> Fields as -> NodeDecoder b
 decodeProductAttributes f fields = mapAll @as f (fieldDecoders @as fields)
@@ -182,19 +186,18 @@ data User = User UserInfo [Friend]
   deriving Show
 
 decodeFriend :: NodeDecoder Friend
-decodeFriend = contramapCursor
-  (NodeCursor "friend")
-  (decodeAssertName "friend" >> decodeProductAttributes
-    @[Username, Username]
-    Friend
-    ("name" `HCons` "nickname" `HCons` ())
-  )
+decodeFriend = inNode
+    "friend"
+    (decodeProductAttributes
+      @[Username, Username]
+      Friend
+      ("name" `HCons` "nickname" `HCons` ())
+    )
 
 decodeUser :: NodeDecoder User
-decodeUser = contramapCursor
-  (NodeCursor "user")
+decodeUser = inNode
+  "user"
   (do
-    decodeAssertName "user"
     info <- decodeProductAttributes
       @[Username, Int]
       UserInfo
