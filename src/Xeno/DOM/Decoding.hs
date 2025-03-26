@@ -6,7 +6,7 @@
 {-# LANGUAGE TypeOperators #-}
 {-# OPTIONS_GHC -Wno-unused-top-binds #-} -- Public API
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE InstanceSigs #-}
+
 
 module Xeno.DOM.Decoding
 where
@@ -146,12 +146,25 @@ decodeAssert fcheck fmsg = NodeDecoder
     else Left [DecodingFailure cursor (fmsg node)]
   )
 
-decodeProductAttributes :: forall as b. (Currying as b, ToFieldDecoders as) => String -> Arrows as b -> Fields as -> NodeDecoder b
-decodeProductAttributes n f fields = contramapCursor
-  (NodeCursor n)
-  (
-    decodeAssert (\nd -> name nd == pack n) (\nd -> "Invalid product name: " ++ unpack (name nd))
-    >> mapAll @as f (fieldDecoders @as fields)
+decodeAssertName :: String -> NodeDecoder ()
+decodeAssertName n =
+  decodeAssert (\nd -> name nd == pack n) (\nd -> "Invalid product name: " ++ unpack (name nd))
+
+decodeProductAttributes :: forall as b. (Currying as b, ToFieldDecoders as) => Arrows as b -> Fields as -> NodeDecoder b
+decodeProductAttributes f fields = mapAll @as f (fieldDecoders @as fields)
+
+decodeChildren :: NodeDecoder a -> NodeDecoder [a]
+decodeChildren childDecoder = NodeDecoder
+  (\cursor node ->
+    foldr
+      (\child acc -> case (applyDecoder childDecoder cursor child, acc) of
+        (Right res, Right values) -> Right (res : values)
+        (Left resErrors, Right _) -> Left resErrors
+        (Right _, Left accErrors) -> Left accErrors
+        (Left resErrors, Left accErrors) -> Left (resErrors ++ accErrors)
+      )
+      (Right [])
+      (children node)
   )
 
 -- TODO Remove example
@@ -159,12 +172,33 @@ decodeProductAttributes n f fields = contramapCursor
 newtype Username = Username String
   deriving (Show, AttrDecoder)
 
-data User = User Username Int
+data UserInfo = UserInfo Username Int
   deriving Show
 
+data Friend = Friend Username Username
+  deriving Show
+
+data User = User UserInfo [Friend]
+  deriving Show
+
+decodeFriend :: NodeDecoder Friend
+decodeFriend = contramapCursor
+  (NodeCursor "friend")
+  (decodeAssertName "friend" >> decodeProductAttributes
+    @[Username, Username]
+    Friend
+    ("name" `HCons` "nickname" `HCons` ())
+  )
+
 decodeUser :: NodeDecoder User
-decodeUser = decodeProductAttributes
-  @[Username, Int]
-  "user"
-  User
-  ("name" `HCons` "age" `HCons` ())
+decodeUser = contramapCursor
+  (NodeCursor "user")
+  (do
+    decodeAssertName "user"
+    info <- decodeProductAttributes
+      @[Username, Int]
+      UserInfo
+      ("name" `HCons` "age" `HCons` ())
+    friends <- decodeChildren decodeFriend
+    return (User info friends)
+  )
