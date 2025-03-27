@@ -1,6 +1,9 @@
 {-# LANGUAGE CPP               #-}
 {-# LANGUAGE BangPatterns      #-}
+{-# LANGUAGE GeneralisedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE DataKinds #-}
 
 -- | Simple test suite.
 
@@ -15,10 +18,22 @@ import           Xeno.DOM  (Node, Content(..), parse, name, contents, attributes
 import qualified Xeno.DOM.Robust as RDOM
 import           Xeno.Types
 import qualified Debug.Trace as Debug(trace)
+import Xeno.DOM.Decoding
+
+newtype Username = Username String
+  deriving (AttrDecoder, Eq, Show)
+
+data UserInfo = UserInfo Username Int
+  deriving (Eq, Show)
+
+data Friend = Friend Username Username
+  deriving (Eq, Show)
+
+data User = User UserInfo [Friend]
+  deriving (Eq, Show)
 
 main :: IO ()
 main = hspec spec
-
 
 spec :: SpecWith ()
 spec = do
@@ -44,7 +59,7 @@ spec = do
           parsedRoot = fromRightE $ parse substr
       name parsedRoot `shouldBe` "valid"
 
-    it "Leading whitespace characters are accepted by parse" $ 
+    it "Leading whitespace characters are accepted by parse" $
       isRight (parse "\n<a></a>") `shouldBe` True
 
     let doc =
@@ -54,13 +69,208 @@ spec = do
     it "children test" $
       map name (children $ fromRightE doc) `shouldBe` ["test", "test", "b", "test", "test"]
 
-    it "attributes" $ 
+    it "attributes" $
       attributes (head (children $ fromRightE doc)) `shouldBe` [("id", "1"), ("extra", "2")]
 
     it "xml prologue test" $ do
       let docWithPrologue = "<?xml version=\"1.1\"?>\n<greeting>Hello, world!</greeting>"
           parsedRoot = fromRightE $ Xeno.DOM.parse docWithPrologue
-      name parsedRoot `shouldBe` "greeting"                
+      name parsedRoot `shouldBe` "greeting"
+  describe "DOM.Decoding tests" $ do
+    describe "AttrDecoder tests" $ do
+      it "ByteString" $
+        decodeAttr @ByteString "abc" `shouldBe` Right "abc"
+
+      it "String" $
+        decodeAttr @String "abc" `shouldBe` Right "abc"
+
+      it "Bool" $ do
+        decodeAttr "true" `shouldBe` Right True
+        decodeAttr "True" `shouldBe` Right True
+        decodeAttr "1" `shouldBe` Right True
+        decodeAttr "false" `shouldBe` Right False
+        decodeAttr "False" `shouldBe` Right False
+        decodeAttr "0" `shouldBe` Right False
+        decodeAttr @Bool "foo" `shouldBe` Left "Invalid bool: foo"
+
+      it "Int" $ do
+        decodeAttr @Int "5" `shouldBe` Right 5
+        decodeAttr @Int "-5" `shouldBe` Right (-5)
+        decodeAttr @Int "abc" `shouldBe` Left "Invalid int: abc"
+
+      it "Integer" $ do
+        decodeAttr @Integer "5" `shouldBe` Right 5
+        decodeAttr @Integer "-5" `shouldBe` Right (-5)
+        decodeAttr @Integer "abc" `shouldBe` Left "Invalid integer: abc"
+
+      it "Float" $ do
+        decodeAttr @Float "5" `shouldBe` Right 5
+        decodeAttr @Float "-5" `shouldBe` Right (-5)
+        decodeAttr @Float "5.2" `shouldBe` Right 5.2
+        decodeAttr @Float "abc" `shouldBe` Left "Invalid float: abc"
+
+      it "Double" $ do
+        decodeAttr @Double "5" `shouldBe` Right 5
+        decodeAttr @Double "-5" `shouldBe` Right (-5)
+        decodeAttr @Double "5.2" `shouldBe` Right 5.2
+        decodeAttr @Double "abc" `shouldBe` Left "Invalid double: abc"
+
+    describe "NodeDecoder tests" $ do
+      let dummyNode = fromRightE $ parse "<foo bar=\"5\"/>"
+      it "return" $
+        decodeXML @String (return "abc") dummyNode `shouldBe` Right "abc"
+
+      it "fail" $
+        decodeXML @() (decodeFail "abc") dummyNode `shouldBe` Left [DecodingFailure RootCursor "abc"]
+
+      it "contramapCursor" $
+        decodeXML @() (contramapCursor (NodeCursor "foo") (decodeFail "abc")) dummyNode
+        `shouldBe` Left [DecodingFailure (NodeCursor "foo" RootCursor) "abc"]
+
+      it "zipHCons" $ do
+        decodeXML (zipHCons @String @Int (return "abc") (return 5)) dummyNode
+          `shouldBe` Right ("abc" `HCons` 5)
+
+        decodeXML (zipHCons @String @Int (decodeFail "abc") (return 5)) dummyNode
+          `shouldBe` Left [DecodingFailure RootCursor "abc"]
+
+        decodeXML
+          (zipHCons
+            (zipHCons @String @Int (return "abc") (return 5))
+            (return True)
+          )
+          dummyNode
+          `shouldBe` Right (("abc" `HCons` 5) `HCons` True)
+
+      it "findAttribute" $ do
+        findAttribute "bar" dummyNode `shouldBe` Just "5"
+        findAttribute "missing" dummyNode `shouldBe` Nothing
+
+      it "mapOrFail" $ do
+        decodeXML @Int (mapOrFail (Right . (2 *)) (return 2)) dummyNode
+          `shouldBe` Right 4
+
+        decodeXML @Int (mapOrFail (\_ -> Left "abc") (return (2 :: Int))) dummyNode
+          `shouldBe` Left [DecodingFailure RootCursor "abc"]
+
+      it "decodeField" $ do
+        decodeXML @Int (decodeField "bar") dummyNode `shouldBe` Right 5
+
+        decodeXML @Int (decodeField "baz") dummyNode
+          `shouldBe` Left [DecodingFailure (FieldCursor "baz" RootCursor) "Field not found: baz"]
+
+        decodeXML @Bool (decodeField "bar") dummyNode
+          `shouldBe` Left [DecodingFailure (FieldCursor "bar" RootCursor) "Invalid bool: 5"]
+
+      it "mapAll" $
+        decodeXML
+          (mapAll
+            @[String, Int]
+            (\a b -> a ++ show b)
+            (return ("abc" `HCons` 5 `HCons` ()))
+          )
+          dummyNode
+          `shouldBe` Right "abc5"
+
+      it "decodeAssert" $ do
+        decodeXML
+          (decodeAssert (\n -> name n == "foo") (const "Wrong name"))
+          dummyNode
+          `shouldBe` Right ()
+
+        decodeXML
+          (decodeAssert (\n -> name n == "bar") (const "Wrong name"))
+          dummyNode
+          `shouldBe` Left [DecodingFailure RootCursor "Wrong name"]
+
+      it "inNode" $ do
+        decodeXML (inNode "foo" (return ())) dummyNode `shouldBe` Right ()
+        decodeXML (inNode "bar" (return ())) dummyNode
+          `shouldBe` Left [DecodingFailure (NodeCursor "bar" RootCursor) "Invalid node name: foo"]
+
+      it "decodeAllAttributes" $ do
+        let nodeOk = fromRightE $ parse "<foo a=\"1\" b=\"abc\" c=\"true\"/>"
+        let nodeNotOk = fromRightE $ parse "<foo a=\"abc\" c=\"true\"/>"
+
+        decodeXML
+          (decodeAllAttributes
+            @[Int, String, Bool]
+            (,,)
+            ("a" `HCons` "b" `HCons` "c" `HCons` ())
+          )
+          nodeOk
+          `shouldBe` Right (1, "abc", True)
+
+        decodeXML
+          (decodeAllAttributes
+            @[Int, String, Bool]
+            (,,)
+            ("a" `HCons` "b" `HCons` "c" `HCons` ())
+          )
+          nodeNotOk
+          `shouldBe` Left
+            [ DecodingFailure (FieldCursor "a" RootCursor) "Invalid int: abc"
+            , DecodingFailure (FieldCursor "b" RootCursor) "Field not found: b"
+            ]
+
+      it "decodeChildren" $ do
+        let nodeOk = fromRightE $ parse "<foo><bar/><bar/></foo>"
+        let nodeEmpty = fromRightE $ parse "<foo></foo>"
+        let nodeNotOk = fromRightE $ parse "<foo><bar/><baz/></foo>"
+
+        let fooDecoder = inNode "foo" (decodeChildren (inNode "bar" (return ())))
+        let bazCursor = NodeCursor "bar" (NodeCursor "foo" RootCursor)
+
+        decodeXML fooDecoder nodeOk `shouldBe` Right [(), ()]
+        decodeXML fooDecoder nodeEmpty `shouldBe` Right []
+        decodeXML fooDecoder nodeNotOk
+          `shouldBe` Left [DecodingFailure bazCursor "Invalid node name: baz"]
+
+      it "fullyFledged" $
+        let
+          decodeFriend = inNode
+            "friend"
+            (decodeAllAttributes
+              @[Username, Username]
+              Friend
+              ("name" `HCons` "nickname" `HCons` ())
+            )
+
+          decodeUser = inNode
+            "user"
+            (do
+              info <- decodeAllAttributes
+                @[Username, Int]
+                UserInfo
+                ("name" `HCons` "age" `HCons` ())
+              friends <- decodeChildren decodeFriend
+              return (User info friends)
+            )
+
+          xml1 = fromRightE $ parse "<user name=\"John\" age=\"30\"/>"
+          xml2 = fromRightE $ parse "<user name=\"John\" age=\"30\"><friend name=\"Alice\" nickname=\"Sis\"/></user>"
+          xml3 = fromRightE $ parse "<user age=\"abc\"/>"
+          xml4 = fromRightE $ parse "<user name=\"John\" age=\"25\"><friend/></user>"
+        in do
+          decodeXML decodeUser xml1 `shouldBe` Right (User (UserInfo (Username "John") 30) [])
+
+          decodeXML decodeUser xml2 `shouldBe` Right
+            (User
+              (UserInfo (Username "John") 30)
+              [Friend (Username "Alice") (Username "Sis")]
+            )
+
+          decodeXML decodeUser xml3 `shouldBe` Left
+            [ DecodingFailure (FieldCursor "name" (NodeCursor "user" RootCursor)) "Field not found: name"
+            , DecodingFailure (FieldCursor "age" (NodeCursor "user" RootCursor)) "Invalid int: abc"
+            ]
+
+          let friendCursor = NodeCursor "friend" (NodeCursor "user" RootCursor)
+
+          decodeXML decodeUser xml4 `shouldBe` Left
+            [ DecodingFailure (FieldCursor "name" friendCursor) "Field not found: name"
+            , DecodingFailure (FieldCursor "nickname" friendCursor) "Field not found: nickname"
+            ]
 
   describe
     "hexml tests"
@@ -68,9 +278,9 @@ spec = do
           (\(v, i) -> it (show i) (shouldBe (validate i) v)) $ concat
           [ hexml_examples_sax
           , extra_examples_sax
-#ifdef WHITESPACE_AROUND_EQUALS
-          , ws_around_equals_sax
-#endif
+
+
+
           ]
         mapM_
           (\(v, i) -> it (show i) (shouldBe (either (Left . show) (Right . id) (contents <$> parse i)) v))
@@ -88,7 +298,7 @@ spec = do
             parsedRoot = fromRightE $ RDOM.parse substr
         name parsedRoot `shouldBe` "valid"
 
-    it "Leading whitespace characters are accepted by parse" $ 
+    it "Leading whitespace characters are accepted by parse" $
       isRight (RDOM.parse "\n<a></a>") `shouldBe` True
 
     let doc =
@@ -98,7 +308,7 @@ spec = do
     it "children test" $
       map name (children $ fromRightE doc) `shouldBe` ["test", "test", "b", "test", "test"]
 
-    it "attributes" $ 
+    it "attributes" $
       attributes (head (children $ fromRightE doc)) `shouldBe` [("id", "1"), ("extra", "2")]
 
     it "xml prologue test" $ do

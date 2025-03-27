@@ -18,6 +18,7 @@ import Data.List (find)
 import Xeno.DOM.Internal.Typelevel
 import Text.Read (readEither)
 import Xeno.Types (HCons (HCons))
+import Data.Char (toLower)
 
 --- AttrDecoder ---
 
@@ -35,7 +36,14 @@ instance AttrDecoder String where
 
 -- |AttrDecoder for Bool.
 instance AttrDecoder Bool where
-  decodeAttr = decodeFromRead "Invalid bool"
+  decodeAttr bs =
+    let
+      unpacked = unpack bs
+      lower = map toLower unpacked
+    in
+      if lower == "true" || lower == "1" then Right True
+      else if lower == "false" || lower == "0" then Right False
+      else Left ("Invalid bool: " ++ unpacked)
 
 -- |AttrDecoder for Int.
 instance AttrDecoder Int where
@@ -66,6 +74,7 @@ data DecodingCursor =
   RootCursor -- ^The root of the XML arborescence.
   | FieldCursor String DecodingCursor -- ^A field in a node.
   | NodeCursor String DecodingCursor -- ^A node.
+  deriving Eq
 
 showAsParent :: DecodingCursor -> String
 showAsParent RootCursor = ""
@@ -84,6 +93,7 @@ cursorParent (NodeCursor _ parent)  = Just parent
 
 -- |A decoding failure represented by a cursor where the failure occurred and an error message.
 data DecodingFailure = DecodingFailure DecodingCursor String
+  deriving Eq
 
 instance Show DecodingFailure where
   show (DecodingFailure cursor str) = "Decoding failure at " ++ show cursor ++ " (" ++ str ++ ")"
@@ -112,6 +122,10 @@ instance Monad NodeDecoder where
 -- |Decode a XML node. Same as using `applyDecoder` with `RootCursor`.
 decodeXML :: NodeDecoder a -> Node -> Either [DecodingFailure] a
 decodeXML decoder = applyDecoder decoder RootCursor
+
+-- |Decoder that always fail.
+decodeFail :: String -> NodeDecoder a
+decodeFail msg = NodeDecoder (\c _ -> Left [DecodingFailure c msg])
 
 -- |Map the cursor passed as input of the given decoder.
 contramapCursor :: (DecodingCursor -> DecodingCursor) -> NodeDecoder a -> NodeDecoder a
@@ -184,7 +198,7 @@ inNode :: String -> NodeDecoder a -> NodeDecoder a
 inNode n decoder = contramapCursor
   (NodeCursor n)
   (
-    decodeAssert (\nd -> name nd == pack n) (\nd -> "Invalid product name: " ++ unpack (name nd))
+    decodeAssert (\nd -> name nd == pack n) (\nd -> "Invalid node name: " ++ unpack (name nd))
     >> decoder
   )
 
@@ -205,39 +219,4 @@ decodeChildren childDecoder = NodeDecoder
       )
       (Right [])
       (children node)
-  )
-
--- TODO Remove example
-
-newtype Username = Username String
-  deriving (Show, AttrDecoder)
-
-data UserInfo = UserInfo Username Int
-  deriving Show
-
-data Friend = Friend Username Username
-  deriving Show
-
-data User = User UserInfo [Friend]
-  deriving Show
-
-decodeFriend :: NodeDecoder Friend
-decodeFriend = inNode
-    "friend"
-    (decodeAllAttributes
-      @[Username, Username]
-      Friend
-      ("name" `HCons` "nickname" `HCons` ())
-    )
-
-decodeUser :: NodeDecoder User
-decodeUser = inNode
-  "user"
-  (do
-    info <- decodeAllAttributes
-      @[Username, Int]
-      UserInfo
-      ("name" `HCons` "age" `HCons` ())
-    friends <- decodeChildren decodeFriend
-    return (User info friends)
   )

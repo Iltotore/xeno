@@ -37,4 +37,5 @@ newtype ByteStringZeroTerminated = BSZT ByteString deriving (Generic, NFData)
 -- |HList/"Flat tuple" used to easily manipulate products, defined as a head with a tail.
 -- See https://www.scala-lang.org/api/3.6.4/scala/$times$colon$.html.
 data h `HCons` t = h `HCons` t
+  deriving (Eq, Show)
 infixr `HCons`
