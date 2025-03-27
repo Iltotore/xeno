@@ -76,14 +76,16 @@ data DecodingCursor =
   | NodeCursor String DecodingCursor -- ^A node.
   deriving Eq
 
-showAsParent :: DecodingCursor -> String
-showAsParent RootCursor = ""
-showAsParent p          = show p ++ " "
-
 instance Show DecodingCursor where
-  show RootCursor = "root"
-  show (FieldCursor str p) = showAsParent p ++ "field:" ++ str
-  show (NodeCursor  str p) = showAsParent p ++ "node:"  ++ str
+  show cursor = case cursor of
+    RootCursor -> "root"
+    FieldCursor str p -> showAsParent p ++ "field:" ++ str
+    NodeCursor  str p -> showAsParent p ++ "node:"  ++ str
+    where
+      showAsParent :: DecodingCursor -> String
+      showAsParent RootCursor = ""
+      showAsParent p          = show p ++ " "
+
 
 -- |Get the parent of a given cursor.
 cursorParent :: DecodingCursor -> Maybe DecodingCursor
