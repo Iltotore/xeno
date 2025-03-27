@@ -5,7 +5,7 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 {-# OPTIONS_GHC -Wno-unused-top-binds #-} -- Public API
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+
 
 --- |Higher level DOM decoding utils.
 module Xeno.DOM.Decoding
@@ -82,7 +82,7 @@ showAsParent p          = show p ++ " "
 
 instance Show DecodingCursor where
   show RootCursor = "root"
-  show (FieldCursor str p) = showAsParent p ++ "field:" ++ str 
+  show (FieldCursor str p) = showAsParent p ++ "field:" ++ str
   show (NodeCursor  str p) = showAsParent p ++ "node:"  ++ str
 
 -- |Get the parent of a given cursor.
