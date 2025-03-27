@@ -50,7 +50,7 @@ type HList (as :: [Type])             = Foldr HCons () as
 -- |Type of a HList of the same size as the `as`, containing only Strings.
 type family Fields (as :: [k]) :: l where
   Fields '[] = ()
-  Fields (x ': xs) = String `HCons` Fields xs
+  Fields (_ ': xs) = String `HCons` Fields xs
 
 -- |Typeclass for uncurrying n-ary functions to n-size HList and vice-versa.
 class Currying as b where
