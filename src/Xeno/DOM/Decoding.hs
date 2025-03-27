@@ -69,12 +69,12 @@ data DecodingCursor =
 
 showAsParent :: DecodingCursor -> String
 showAsParent RootCursor = ""
-showAsParent p          = show p ++ " -> "
+showAsParent p          = show p ++ " "
 
 instance Show DecodingCursor where
   show RootCursor = "root"
-  show (FieldCursor str p) = showAsParent p ++ "field " ++ str 
-  show (NodeCursor  str p) = showAsParent p ++ "node "  ++ str
+  show (FieldCursor str p) = showAsParent p ++ "field:" ++ str 
+  show (NodeCursor  str p) = showAsParent p ++ "node:"  ++ str
 
 -- |Get the parent of a given cursor.
 cursorParent :: DecodingCursor -> Maybe DecodingCursor
@@ -86,7 +86,7 @@ cursorParent (NodeCursor _ parent)  = Just parent
 data DecodingFailure = DecodingFailure DecodingCursor String
 
 instance Show DecodingFailure where
-  show (DecodingFailure cursor str) = "Decoding failure at " ++ show cursor ++ ", with message: " ++ str
+  show (DecodingFailure cursor str) = "Decoding failure at " ++ show cursor ++ " (" ++ str ++ ")"
 
 -- |An XML node decoder. Since a node can be decoded in several "natural" ways, this is not a typeclass.
 -- Instead, the goal is to provide some sort of DSL to easily describe the decoding logic.
